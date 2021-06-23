@@ -2010,13 +2010,29 @@ where
     }
 
     let store = Arc::new(RwLock::new(data));
+    let custom_flags:i32 = if let Ok(num) = std::env::var("CUSTOM_STORE_FLAGS") {
+        if let Ok(num) = num.parse() {
+            num
+        } else {
+            0x0
+        }
+    } else {
+        0x0
+    };
 
     iter.chunks(BUILD_DATA_BLOCK_SIZE)
         .enumerate()
         .try_for_each(|(index, chunk)| {
             let mut a = A::default();
-            let mut buf = Vec::with_capacity(BUILD_DATA_BLOCK_SIZE * E::byte_len());
 
+            let mut buf = if custom_flags > 0 {
+                use std::alloc::{GlobalAlloc, System, Layout};
+                let layout = Layout::from_size_align(BUILD_DATA_BLOCK_SIZE, 4096).unwrap();
+                let buf_raw = unsafe {System.alloc(layout)};
+                unsafe {Vec::from_raw_parts(buf_raw, 0, BUILD_DATA_BLOCK_SIZE * E::byte_len())}
+            } else {
+                Vec::with_capacity(BUILD_DATA_BLOCK_SIZE * E::byte_len())
+            };
             for item in chunk {
                 a.reset();
                 buf.extend(a.leaf(item).as_ref());

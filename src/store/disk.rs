@@ -30,6 +30,7 @@ pub struct DiskStore<E: Element> {
     elem_len: usize,
     _e: PhantomData<E>,
     file: File,
+    diofile: Option<File>,
 
     // This flag is useful only immediate after instantiation, which
     // is false if the store was newly initialized and true if the
@@ -56,16 +57,38 @@ impl<E: Element> Store<E> for DiskStore<E> {
             .write(true)
             .read(true)
             .create_new(true)
-            .open(data_path)?;
+            .open(&data_path)?;
 
         let store_size = E::byte_len() * size;
         file.set_len(store_size as u64)?;
 
+        let custom_flags: i32 = if let Ok(num) = std::env::var("CUSTOM_STORE_FLAGS") {
+            if let Ok(num) = num.parse() {
+                num
+            } else {
+                0x0
+            }
+        } else {
+            0x0
+        };
+        let diofile = if custom_flags > 0 {
+            use std::os::unix::fs::OpenOptionsExt;
+            let diofile = OpenOptions::new()
+                .write(true)
+                .read(true)
+                .create_new(true)
+                .custom_flags(custom_flags)
+                .open(&data_path)?;
+            Some(diofile)
+        } else {
+             None
+        };
         Ok(DiskStore {
             len: 0,
             elem_len: E::byte_len(),
             _e: Default::default(),
             file,
+            diofile,
             loaded_from_disk: false,
             store_size,
         })
@@ -81,6 +104,7 @@ impl<E: Element> Store<E> for DiskStore<E> {
             elem_len: E::byte_len(),
             _e: Default::default(),
             file,
+            diofile: None,
             loaded_from_disk: false,
             store_size,
         })
@@ -146,6 +170,7 @@ impl<E: Element> Store<E> for DiskStore<E> {
             elem_len: E::byte_len(),
             _e: Default::default(),
             file,
+            diofile: None,
             loaded_from_disk: true,
             store_size,
         })
@@ -523,8 +548,15 @@ impl<E: Element> DiskStore<E> {
             "Requested slice too large (max: {})",
             self.store_size
         );
-        self.file.write_all_at(start as u64, slice)?;
-
+        if start % 512 == 0 || slice.len() % 512 == 0 {
+            if let Some(file) = &mut self.diofile {
+                file.write_all_at(start as u64, slice)?;
+            } else {
+                self.file.write_all_at(start as u64, slice)?;
+            }
+        } else {
+            self.file.write_all_at(start as u64, slice)?;
+        }
         Ok(())
     }
 }
